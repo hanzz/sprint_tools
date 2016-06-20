@@ -18,7 +18,7 @@ class Sprint
       send("#{k}=",v)
     end
     init_stories
-    init_rfes
+    #init_rfes
   end
 
   def day
@@ -190,8 +190,8 @@ class Sprint
     where = nil
     if parent = query[:parent]
       where = send(parent)
-    elsif query[:type] == 'rfes'
-      where = rfes.values
+#    elsif query[:type] == 'rfes'
+#      where = rfes.values
     else
       where = query_stories(query)
     end

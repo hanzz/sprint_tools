@@ -106,32 +106,23 @@
           label_names = labels.map{ |label| label.name }
           label_names.each do |label_name|
             if label_name =~ RELEASE_LABEL_REGEX
-              if product == $3
                 state = $1
-                release = $4
-                major = $5.to_i
-                minor = $7.to_i
-                patch = $9.to_i
-                hotfix = $11.to_i
+                release = label_name
                 orig_state = state
                 if complete
                   state = 'committed'
                 end
                 pos = index + pos_adjustment
-                releases << [release, major, minor, patch, hotfix] unless release_data[release]
+                releases << [label_name, label_name, label_name, label_name, label_name] unless release_data[release]
                 release_data[release] = {} unless release_data[release]
                 release_data[release][state] = [] unless release_data[release][state]
                 release_data[release][state] << [card, status, board, team_name, list_name, orig_state, pos]
               end
-            end
           end
         end
       end
 
       tag_to_epics = trello.tag_to_epics
-
-      bugzilla = load_conf(BugzillaHelper, CONFIG.bugzilla, true)
-      rfes = bugzilla.rfes
 
       releases.sort_by!{ |release| [release[1], release[2], release[3], release[4]] }
 
@@ -288,11 +279,6 @@
             end
 
             related_rfe = nil
-            if card.desc =~ TrelloHelper::BUGZILLA_REGEX
-              if rfes[$2.to_i]
-                related_rfe = $1
-              end
-            end
 
             name = card.name.strip
             sizing = nil

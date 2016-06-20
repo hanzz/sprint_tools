@@ -117,9 +117,6 @@
 
       tag_to_epics = trello.tag_to_epics
 
-      bugzilla = load_conf(BugzillaHelper, CONFIG.bugzilla, true)
-      rfes = bugzilla.rfes
-
       releases.sort_by!{ |release| [release[0] ? release[0] : '', release[2], release[3], release[4], release[5]] }
 
       state_titles = {
@@ -238,11 +235,6 @@
             end
 
             related_rfe = nil
-            if card.desc =~ TrelloHelper::BUGZILLA_REGEX
-              if rfes[$2.to_i]
-                related_rfe = $1
-              end
-            end
 
             name = card.name.strip
             sizing = nil

@@ -49,7 +49,7 @@ LINKS = {'roadmap_overview' => 'Roadmap',
          'labels_overview' => 'Labels',
          'sprint_schedule' => 'Sprint Schedule'}
 
-RELEASE_LABEL_REGEX = /^(proposed|targeted|committed)-((\w*)-)*((\d+)(.(\d+))?(.(\d+))?(.(\d+))*)/
+RELEASE_LABEL_REGEX = /^(proposed|targeted|committed)-(\w*)/
 
 def create_releases_overview(out, trello)
   extname = File.extname out
@@ -452,7 +452,8 @@ command :sync_labels do |c|
   c.action do |args, options|
     roadmap_label_colors_by_name = trello.roadmap_label_colors_by_name
     unless roadmap_label_colors_by_name.empty?
-      boards = [trello.public_roadmap_board] + trello.boards.values
+#      boards = [trello.public_roadmap_board] + trello.boards.values
+       boards = trello.boards.values
       boards.each do |board|
         puts "\nBoard Name: #{board.name}"
         board_labels = trello.target(trello.board_labels(board))
@@ -502,7 +503,7 @@ command :sync_labels do |c|
           if !roadmap_label_colors_by_name.has_key?(board_label.name)
             puts "Deleting label #{board_label.name}"
             begin
-              trello.delete_label(board_label)
+              #trello.delete_label(board_label)
             rescue => e
               $stderr.puts "Error deleting label: #{e.message}"
             end
@@ -673,7 +674,7 @@ command :update do |c|
                   accepted_lists << l
                 elsif l.name =~ TrelloHelper::SPRINT_REGEXES
                   previous_sprint_lists << l
-                else
+                else #sif l.name != "Features/Epics"
                   other_lists << l
                 end
               end
@@ -776,12 +777,13 @@ command :update do |c|
               if !next_card_releases.empty?
                 next_card_releases.each do |card_release|
                   cl = trello.create_checklist(epic, card_release)
+                  puts "Adding 1 #{card.url}"
                   trello.checklist_add_item(cl, "[#{card.name}](#{card.url}) (#{list.name}) (#{board.name})", accepted, 'bottom')
                 end
               else
                 stories_checklist = trello.checklist(epic, checklist_name)
                 if stories_checklist
-                  puts "Adding #{card.url}"
+                  puts "Adding 2 #{card.url}"
                   trello.checklist_add_item(stories_checklist, "[#{card.name}](#{card.url}) (#{list.name}) (#{board.name})", accepted, 'bottom')
                 end
               end
@@ -812,9 +814,9 @@ command :update do |c|
     end
     if options.add_task_checklists || options.add_bug_checklists || options.update_bug_tasks || options.add_doc_tasks || options.add_doc_cards
       bugzilla = nil
-      if options.update_bug_tasks
-        bugzilla = load_conf(BugzillaHelper, CONFIG.bugzilla, true)
-      end
+#       if options.update_bug_tasks
+#         bugzilla = load_conf(BugzillaHelper, CONFIG.bugzilla, true)
+#       end
       if options.add_doc_cards && (trello.documentation_board.id != trello.docs_planning_board.id)
         lists = trello.board_lists(trello.docs_planning_board)
         lists.each do |list|
