@@ -420,7 +420,7 @@ class TrelloHelper
       end
     end
     create_checklist(epic_card, UNASSIGNED_RELEASE)
-    create_checklist(epic_card, FUTURE_RELEASE)
+#     create_checklist(epic_card, FUTURE_RELEASE)
   end
 
   def create_checklist(card, checklist_name)
@@ -458,7 +458,7 @@ class TrelloHelper
   def delete_empty_epic_checklists(epic_card)
     checklists = list_checklists(epic_card)
     checklists.each do |cl|
-      next if [UNASSIGNED_RELEASE, FUTURE_RELEASE].include? cl.name
+      next if [UNASSIGNED_RELEASE].include? cl.name
       if cl.items.empty?
         begin
           trello_do('checklist') do
