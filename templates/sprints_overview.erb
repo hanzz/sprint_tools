@@ -78,12 +78,12 @@
               else
                 sprint_id = [$3.to_i, $4.to_i, $6.to_i, $8.to_i]
               end
-            elsif TrelloHelper::BACKLOG_STATES.include?(list_name)
-              sprint_id = [9999999]
             elsif TrelloHelper::NEXT_STATES.include?(list_name)
               sprint_id = [9999998]
             elsif TrelloHelper::CURRENT_SPRINT_STATES.include?(list_name)
               sprint_id = [9999997]
+            elsif list_name == "Complete"
+              sprint_id = [9999996]
             end
             if sprint_id
               cards = trello.list_cards(list)
@@ -184,6 +184,10 @@
             sprint_next = "next"
           elsif sprint_num == 9999997
             sprint_name = "In Progress"
+            sprint_dates = "(#{sprint_begin} - #{sprint_end})"
+            sprint_in_progress = "in-progress"
+          elsif sprint_num == 9999996
+            sprint_name = "Complete"
             sprint_dates = "(#{sprint_begin} - #{sprint_end})"
             sprint_in_progress = "in-progress"
           else
