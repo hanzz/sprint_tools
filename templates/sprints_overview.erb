@@ -82,7 +82,7 @@
               sprint_id = [9999998]
             elsif TrelloHelper::CURRENT_SPRINT_STATES.include?(list_name)
               sprint_id = [9999997]
-            elsif list_name == "Complete"
+            elsif TrelloHelper::COMPLETE_STATES.include?(list_name)
               sprint_id = [9999996]
             end
             if sprint_id
