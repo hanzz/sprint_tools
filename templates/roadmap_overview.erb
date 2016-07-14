@@ -95,6 +95,13 @@ Corresponding Private Roadmap Board Epic: <a href='<%=secondary_epic_card.url%>'
                 url = $2
                 list = $3
                 board = $4
+              else
+                if name =~ /\[(.*)\]\((https?:\/\/trello\.com\/[^\)]+)\) \(([^\)]+)\)\) \(([^\)]+)\)/
+                  name = $1.strip
+                  url = $2
+                  list = $3 + ")"
+                  board = $4
+                end
               end
               key = url ? url : name
               c = cards[key]
