@@ -44,12 +44,10 @@ $tag_to_label_color = {
 LINKS = {'roadmap_overview' => 'Roadmap',
          'releases_overview' => 'Releases',
          'teams_overview' => 'Teams',
+         'developers_overview' => 'Developers',
          'sprints_overview' => 'Sprints',
-         'previous_sprints_overview' => 'Previous Sprints',
          'labels_overview' => 'Labels',
          'sprint_schedule' => 'Sprint Schedule'}
-
-RELEASE_LABEL_REGEX = /^(proposed|targeted|committed)-(\w*)/
 
 def create_releases_overview(out, trello)
   extname = File.extname out
@@ -85,6 +83,23 @@ def create_teams_overview(out, trello)
   end
 end
 
+def create_developers_overview(out, trello)
+  extname = File.extname out
+  filename = File.basename out, extname
+  dirname = File.dirname out
+
+  (trello.teams.keys + [nil]).each do |team|
+    erb = ERB.new(File.open('templates/developers_overview.erb', "rb").read)
+    file = nil
+    if team
+      file = File.join(dirname, "#{filename}_#{team}#{extname}")
+    else
+      file = out
+    end
+    File.open(file, 'w') {|f| f.write(erb.result(binding)) }
+  end
+end
+
 def create_labels_overview(out, trello)
   erb = ERB.new(File.open('templates/labels_overview.erb', "rb").read)
   File.open(out, 'w') {|f| f.write(erb.result(binding)) }
@@ -109,7 +124,7 @@ command :backup_org_boards do |c|
       $stderr.puts "Directory #{output_dir} doesn't specify a writable directory."
       exit 1
     end
-    trello.boards.each do |board_id, board|
+    trello.org_boards.each do |board|
       unless board.nil?
         out_filename = "#{board.url.split('/').last}.json"
         out_path = File.join(output_dir, out_filename)
@@ -207,7 +222,7 @@ command :days_until_code_freeze do |c|
 
   c.description = "Print the number of days left until the next code freeze"
   c.action do |args, options|
-    sprint = Sprint.new({:trello => trello})
+    sprint = Sprint.new({:trello => trello, :uninitialized => true})
     print (sprint.code_freeze.to_time - Time.new).to_i / (60*60*24)
   end
 end
@@ -251,6 +266,22 @@ command :list_invalid_users do |c|
   end
 end
 
+command :generate_release_json do |c|
+  c.syntax = "#{name} generate_release_json"
+  c.option "--out-dir DIRECTORY", "The dir to output to Ex: /tmp"
+  c.option "--release RELEASE", "Release to build json for Ex: 3.3"
+  c.option "--product PRODUCT", "Product to build json for Ex: myproduct"
+
+  c.description = "Generate json for the cards in a release"
+  c.action do |args, options|
+    release_cards = trello.release_cards(options.product, options.release)
+    if options.out_dir
+      File.open(File.join(options.out_dir, "#{options.product ? options.product + '-' : '' }#{options.release}.json"), 'w') {|f| f.write(JSON.pretty_generate(release_cards)) }
+    else
+      pp JSON.pretty_generate(release_cards)
+    end
+  end
+end
 
 command :generate_trello_login_to_email_json do |c|
   c.syntax = "#{name} generate_trello_login_to_email_json"
@@ -263,9 +294,9 @@ command :generate_trello_login_to_email_json do |c|
     members = trello.org.members
     valid_users = ldap.valid_users(members)
     if options.out
-      File.open(options.out, 'w') {|f| f.write(valid_users.to_json) }
+      File.open(options.out, 'w') {|f| f.write(JSON.pretty_generate(valid_users)) }
     else
-      pp valid_users.to_json
+      pp JSON.pretty_generate(valid_users)
     end
   end
 end
@@ -398,6 +429,18 @@ command :generate_teams_overview do |c|
   end
 end
 
+command :generate_developers_overview do |c|
+  c.syntax = "#{name} generate_developers_overview"
+
+  c.option "--out OUT_FILE", "The file to output Ex: /tmp/developers_overview.html"
+
+  c.description = "Generate the developers overview"
+  c.action do |args, options|
+    options.out ||= '/tmp/developers_overview.html'
+    create_developers_overview(options.out, trello)
+  end
+end
+
 command :generate_default_overviews do |c|
   c.syntax = "#{name} generate_default_overviews"
 
@@ -411,8 +454,9 @@ command :generate_default_overviews do |c|
     create_releases_overview(File.join(options.out_dir, 'releases_overview.html'), trello)
     create_labels_overview(File.join(options.out_dir, 'labels_overview.html'), trello)
     create_teams_overview(File.join(options.out_dir, 'teams_overview.html'), trello)
+    create_developers_overview(File.join(options.out_dir, 'developers_overview.html'), trello)
 
-    options.sprints = options.sprints ? options.sprints.to_i : 8
+    options.sprints = options.sprints ? options.sprints.to_i : 14
     options.offset = options.offset ? options.offset.to_i : 0
 
     erb = ERB.new(File.open('templates/sprints_overview.erb', "rb").read)
@@ -574,6 +618,7 @@ command :convert_markers_to_labels do |c|
             card_name = card.name
             card_tags = card_name.scan(/\[[^\]]+\]/)
             card_tags.each do |card_tag|
+              card_tag.downcase!
               if card_tag == TrelloHelper::FUTURE_TAG
                 epic_label_name = TrelloHelper::FUTURE_LABEL
               else
@@ -583,14 +628,14 @@ command :convert_markers_to_labels do |c|
                 unless trello.card_labels(card).map{|c| c.name }.include?(epic_label_name)
                   epic_label = board_labels_by_name[epic_label_name]
                   puts "Adding #{epic_label.name} to #{card.name} (#{card.url})"
-                  card.add_label(epic_label)
+                  trello.add_label_to_card(card, epic_label)
                 end
                 card_name = card_name.sub "#{card_tag} ", ''
                 card_name = card_name.sub " #{card_tag}", ''
                 card_name = card_name.sub card_tag, ''
                 card.name = card_name
                 puts "New card name #{card.name}"
-                card.save
+                trello.update_card(card)
               end
             end
           end
@@ -612,191 +657,9 @@ command :update do |c|
 
   c.description = "An assortment of Trello modification utilities"
   c.action do |args, options|
-    doc_descriptions = []
+    doc_cards = []
     if options.update_roadmap
-
-      releases = []
-      roadmap_label_colors_by_name = trello.roadmap_label_colors_by_name
-      roadmap_label_colors_by_name.each_key do |label_name|
-        if label_name =~ RELEASE_LABEL_REGEX
-          releases << label_name
-        end
-      end
-
-      tag_to_epics = trello.tag_to_epics
-      trello.roadmap_boards.each do |roadmap_board|
-        epic_lists = trello.epic_lists(roadmap_board)
-        tag_to_epic = {}
-        epic_lists.each do |epic_list|
-          trello.list_cards(epic_list).each do |epic_card|
-            trello.rename_checklist(epic_card, "Scenarios", TrelloHelper::UNASSIGNED_RELEASE)
-            trello.rename_checklist(epic_card, "Future Scenarios", TrelloHelper::FUTURE_RELEASE)
-            trello.card_labels(epic_card).each do |label|
-              if label.name.start_with? 'epic-'
-                tag_to_epic[label.name] = epic_card
-              end
-            end
-            epic_card.name.scan(/\[[^\]]+\]/).each do |tag|
-              if tag != TrelloHelper::FUTURE_TAG && !tag_to_epic["epic-#{tag[1..-2]}"]
-                tag_to_epic[tag] = epic_card
-              end
-            end
-          end
-        end
-        puts 'Tags:'
-        puts tag_to_epic.keys.pretty_inspect
-        epic_stories_by_epic = {}
-        (1..2).each do |accepted_pass|
-          trello.boards.each do |board_id, board|
-            if roadmap_board.prefs['permissionLevel'] == 'org' || roadmap_board.prefs['permissionLevel'] == board.prefs['permissionLevel']
-              puts "\nBoard Name: #{board.name}"
-              all_lists = trello.board_lists(board)
-              new_lists = []
-              backlog_lists = []
-              next_lists = []
-              in_progress_lists = []
-              complete_lists = []
-              accepted_lists = []
-              previous_sprint_lists = []
-              other_lists = []
-              all_lists.each do |l|
-                if TrelloHelper::NEW_STATES.include?(l.name)
-                  new_lists << l
-                elsif TrelloHelper::BACKLOG_STATES.include?(l.name)
-                  backlog_lists << l
-                elsif TrelloHelper::NEXT_STATES.include?(l.name)
-                  next_lists << l
-                elsif TrelloHelper::IN_PROGRESS_STATES.include?(l.name)
-                  in_progress_lists << l
-                elsif TrelloHelper::COMPLETE_STATES.include?(l.name)
-                  complete_lists << l
-                elsif TrelloHelper::ACCEPTED_STATES.include?(l.name)
-                  accepted_lists << l
-                elsif l.name =~ TrelloHelper::SPRINT_REGEXES
-                  previous_sprint_lists << l
-                else #sif l.name != "Features/Epics"
-                  other_lists << l
-                end
-              end
-
-              lists = accepted_lists + complete_lists + in_progress_lists + next_lists + backlog_lists + new_lists
-
-              previous_sprint_lists = previous_sprint_lists.sort_by { |l| [l.name =~ TrelloHelper::SPRINT_REGEXES ? $1.to_i : 9999999, $3.to_i, $4.to_i, $6.to_i, $8.to_i]}
-              lists += previous_sprint_lists
-              lists += other_lists
-              lists.each do |list|
-                accepted = (list.name.match(TrelloHelper::SPRINT_REGEXES) || TrelloHelper::ACCEPTED_STATES.include?(list.name)) ? true : false
-                next if (accepted && accepted_pass == 1) || (!accepted && accepted_pass == 2)
-                cards = trello.list_cards(list)
-                if !cards.empty?
-                  puts "\n  List: #{list.name}  (#cards: #{cards.length})"
-                  cards.each_with_index do |card, index|
-                    card_tags = []
-                    card_labels = trello.card_labels(card)
-                    next_card_releases = []
-                    card_releases = {}
-                    card_labels.each do |label|
-                      if label.name.start_with? 'epic-'
-                        card_tags << label.name
-                      elsif releases.include?(label.name) && label.name =~ RELEASE_LABEL_REGEX
-                        state = $1
-                        product = $3
-                        release = $4
-                        major = $5.to_i
-                        minor = $7.to_i
-                        patch = $9.to_i
-                        hotfix = $11.to_i
-                        card_releases[product] = [] unless card_releases[product]
-                        card_releases[product] << [label, state, release, major, minor, patch, hotfix]
-                      end
-                    end
-
-                    unless card_releases.empty?
-                      card_releases.each do |product, product_card_releases|
-                        if product_card_releases.length > 1
-                          product_card_releases.sort_by!{ |release| [release[3], release[4], release[5], release[6], TrelloHelper::RELEASE_STATE_ORDER[release[1]]] }
-                          first_release = product_card_releases.first
-                          previous_release = first_release[2]
-                          lowest_state_order = TrelloHelper::RELEASE_STATE_ORDER[first_release[1]]
-                          product_card_releases[1..-1].each do |release|
-                            state_order = TrelloHelper::RELEASE_STATE_ORDER[release[1]]
-                            if previous_release == release[2] || lowest_state_order <= state_order
-                              label = release[0]
-                              puts "Removing lower priority release #{label.name} from #{card.name} (#{card.url})"
-                              card.remove_label(label)
-                            end
-                            lowest_state_order = state_order if state_order < lowest_state_order
-                            previous_release = release[2]
-                          end
-                        end
-                        next_card_releases << product_card_releases.first[0].name
-                      end
-                    end
-
-                    marker_card_tags = card.name.scan(/\[[^\]]+\]/)
-                    checklist_name = (marker_card_tags.include?(TrelloHelper::FUTURE_TAG) || card_labels.map{|l| l.name }.include?(TrelloHelper::FUTURE_LABEL)) ? TrelloHelper::FUTURE_RELEASE : TrelloHelper::UNASSIGNED_RELEASE
-                    card_tags += marker_card_tags
-
-                    card_tags.each do |card_tag|
-                      epic = tag_to_epic[card_tag]
-                      if epic
-                        if (roadmap_board.prefs['permissionLevel'] == 'org' && tag_to_epics[card_tag].length == 1) || (roadmap_board.prefs['permissionLevel'] == board.prefs['permissionLevel'])
-                          epic_stories_by_epic[epic.id] = [] unless epic_stories_by_epic[epic.id]
-                          epic_stories_by_epic[epic.id] << [epic, card, list, board, checklist_name, accepted, next_card_releases]
-                        end
-                      end
-                    end
-                  end
-                end
-              end
-            end
-          end
-        end
-
-        epic_lists.each do |epic_list|
-          trello.list_cards(epic_list).each do |epic_card|
-            unless epic_stories_by_epic[epic_card.id]
-              trello.clear_epic_refs(epic_card)
-            end
-          end
-        end
-        epic_stories_by_epic.each_value do |epic_stories|
-          first_epic_story = epic_stories.first
-          if first_epic_story
-            trello.clear_epic_refs(first_epic_story[0])
-            puts "\nAdding cards to #{first_epic_story[0].name}:"
-            epic_stories.each do |epic_story|
-              epic = epic_story[0]
-              card = epic_story[1]
-              list = epic_story[2]
-              board = epic_story[3]
-              checklist_name = epic_story[4]
-              accepted = epic_story[5]
-              next_card_releases = epic_story[6]
-
-              if !next_card_releases.empty?
-                next_card_releases.each do |card_release|
-                  cl = trello.create_checklist(epic, card_release)
-                  puts "Adding 1 #{card.url}"
-                  trello.checklist_add_item(cl, "[#{card.name}](#{card.url}) (#{list.name}) (#{board.name})", accepted, 'bottom')
-                end
-              else
-                stories_checklist = trello.checklist(epic, checklist_name)
-                if stories_checklist
-                  puts "Adding 2 #{card.url}"
-                  trello.checklist_add_item(stories_checklist, "[#{card.name}](#{card.url}) (#{list.name}) (#{board.name})", accepted, 'bottom')
-                end
-              end
-            end
-          end
-        end
-        # Delete empty epic checklists
-        epic_lists.each do |epic_list|
-          trello.list_cards(epic_list).each do |epic_card|
-            trello.delete_empty_epic_checklists(epic_card)
-          end
-        end
-      end
+      trello.update_roadmap
     end
     if options.add_doc_cards
       lists = trello.board_lists(trello.documentation_board)
@@ -806,7 +669,7 @@ command :update do |c|
           puts "\n  List: #{list.name}  (#cards #{cards.length})"
           cards.each_with_index do |card, index|
             if !(card.name =~ TrelloHelper::SPRINT_REGEX && !card.due.nil?)
-              doc_descriptions << card.desc if options.add_doc_cards
+              doc_cards << card
             end
           end
         end
@@ -814,21 +677,19 @@ command :update do |c|
     end
     if options.add_task_checklists || options.add_bug_checklists || options.update_bug_tasks || options.add_doc_tasks || options.add_doc_cards
       bugzilla = nil
-#       if options.update_bug_tasks
+#      if options.update_bug_tasks
 #         bugzilla = load_conf(BugzillaHelper, CONFIG.bugzilla, true)
 #       end
-      if options.add_doc_cards && (trello.documentation_board.id != trello.docs_planning_board.id)
-        lists = trello.board_lists(trello.docs_planning_board)
-        lists.each do |list|
-          cards = trello.list_cards(list)
-          if !cards.empty?
-            cards.each_with_index do |card, index|
-              doc_descriptions << card.desc
-            end
-          end
+      documentation_board_labels = nil
+      if options.add_doc_cards
+        documentation_board_labels = trello.target(trello.board_labels(trello.documentation_board))
+        documentation_board_labels_by_name = {}
+        documentation_board_labels.each do |board_label|
+          documentation_board_labels_by_name[board_label.name] = board_label
         end
       end
       trello.boards.each do |board_id, board|
+        next if board_id == trello.documentation_board.id
         puts "\nBoard Name: #{board.name}"
         lists = trello.board_lists(board)
         lists.each do |list|
@@ -840,24 +701,56 @@ command :update do |c|
                 if options.add_task_checklists || options.add_bug_checklists || options.add_doc_cards
                   if !(card.name =~ TrelloHelper::SPRINT_REGEX && !card.due.nil?)
                     labels = trello.card_labels(card)
+                    label_names = labels.map{|l| l.name }
                     checklists = []
                     checklists << 'Tasks' if options.add_task_checklists
-                    checklists << 'Bugs' if options.add_bug_checklists && !labels.map{|l| l.name }.include?('no-qe')
+                    checklists << 'Bugs' if options.add_bug_checklists && !label_names.include?('no-qe')
 
-                    if options.add_doc_cards && labels.map{|l| l.name }.include?('documentation') && doc_descriptions.any?
-                      found = false
-                      doc_descriptions.each do |desc|
-                        if desc.include?(card.short_url)
-                          found = true
+                    if options.add_doc_cards && label_names.include?('documentation') && doc_cards.any?
+                      docs_card = nil
+                      doc_cards.each do |d_card|
+                        if d_card.desc.include?(card.short_url)
+                          docs_card = d_card
                           break
                         end
                       end
-                      unless found
+                      unless docs_card
                         name = card.name
-                        if card.name =~ /\((\d+|\?)\)(.*)/
+                        if card.name =~ TrelloHelper::CARD_NAME_REGEX
                           name = $2.strip
                         end
-                        c = Trello::Card.create(:name => "Document: #{name}", :desc => "Corresponding Development Card: #{card.short_url}", :list_id => trello.documentation_next_list.id)
+                        docs_card = Trello::Card.create(:name => "Document: #{name}", :desc => "Corresponding Development Card: #{card.short_url}", :list_id => trello.documentation_next_list.id)
+                      end
+                      # Sync release labels from the dev card to the docs card
+                      release_labels = []
+                      label_names.each do |label_name|
+                        if label_name =~ TrelloHelper::RELEASE_LABEL_REGEX
+                          release_labels << label_name
+                        end
+                      end
+                      docs_card_labels = trello.card_labels(docs_card)
+                      docs_card_label_names = docs_card_labels.map{|l| l.name }
+                      docs_card_release_labels = []
+                      docs_card_label_names.each do |docs_card_label_name|
+                        if docs_card_label_name =~ TrelloHelper::RELEASE_LABEL_REGEX
+                          docs_card_release_labels << docs_card_label_name
+                        end
+                      end
+                      labels_to_remove = docs_card_release_labels - release_labels
+                      labels_to_add = release_labels - docs_card_release_labels
+                      labels_to_remove.each do |label_name|
+                        label = documentation_board_labels_by_name[label_name]
+                        if label
+                          puts "Removing #{label_name} from #{docs_card.name} (#{docs_card.url})"
+                          trello.remove_label_from_card(docs_card, label, false)
+                        end
+                      end
+                      labels_to_add.each do |label_name|
+                        label = documentation_board_labels_by_name[label_name]
+                        if label
+                          puts "Adding #{label_name} to #{docs_card.name} (#{docs_card.url})"
+                          trello.add_label_to_card(docs_card, label, false)
+                        end
                       end
                     end
 

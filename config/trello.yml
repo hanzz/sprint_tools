@@ -6,7 +6,7 @@
 :consumer_secret: <consumer_secret>
 :oauth_token: <oauth_token>
 :oauth_token_secret: <oauth_secret>
-:max_lists_per_board: 16
+:max_lists_per_board: 26
 :default_product: product1
 :other_products:
   - product2
@@ -22,7 +22,6 @@
 :roadmap_id: <roadmap_id>
 :public_roadmap_id: <public_roadmap_id>
 :documentation_id: <documentation_board_id>
-:docs_planning_id: <documentation planning board id>
 :docs_new_list_name: New
 :organization_id: <organication short name>
 :organization_name: <organization display name>
@@ -33,3 +32,4 @@
 :sprint_start_day: monday
 :sprint_end_day: friday
 :logo: <logo url>
+:archive_path: <archive path>

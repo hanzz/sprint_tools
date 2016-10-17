@@ -45,6 +45,7 @@
       cross_epic_remaining_sizing_total = 0
       cross_epic_card_names = {}
       tag_to_epics = trello.tag_to_epics
+      tag_to_epics.delete_if{ |tag, epics| tag_to_epics.include?("epic-#{tag[1..-2]}") }
 %>
     <h2>Table of Contents</h2>
     <ol>
@@ -120,7 +121,7 @@ Corresponding Private Roadmap Board Epic: <a href='<%=secondary_epic_card.url%>'
             releases = card[4]
             sizing = ''
 
-            if name =~ /\((\d+|\?)\)(.*)/
+            if name =~ TrelloHelper::CARD_NAME_REGEX
               sizing = $1
               name = $2
 
@@ -170,7 +171,12 @@ Corresponding Private Roadmap Board Epic: <a href='<%=secondary_epic_card.url%>'
 
 
 <strong>Total Completed Points: <%="#{cross_epic_complete_sizing_total} of #{cross_epic_complete_sizing_total + cross_epic_remaining_sizing_total}"%></strong><br />
-
+    <br/>
+    <br/>
+    <br/>
+    <br/>
+    <hr>
+    <i>Generated at <%=Time.now.strftime("%I:%M%p %Z")%></i><%if trello.archive_path%> - <a href="<%=trello.archive_path%>">archives</a><%end%>
   </div><!-- /container -->
 </body>
 </html>

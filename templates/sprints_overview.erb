@@ -49,7 +49,7 @@
         <div class="navbar-collapse collapse">
           <ul class="nav navbar-nav">
               <% LINKS.each do |page_name, page_title|
-                if page_name != (options.offset > 0 ? 'previous_sprints_overview' : 'sprints_overview') %>
+                if page_name != 'sprints_overview' %>
                   <li><a href='<%=page_name%>.html'><%=page_title%></a></li>
                 <%else%>
                   <li><a class="active" href='<%=page_name%>.html'><%=page_title%></a></li>
@@ -76,7 +76,7 @@
               if $1
                 sprint_id = [$1.to_i]
               else
-                sprint_id = [$3.to_i, $4.to_i, $6.to_i, $8.to_i]
+                sprint_id = [$3 ? $3.to_i : $10.to_i, $4 ? $4.to_i : $11.to_i, $6 ? $6.to_i : $13.to_i, $8 ? $8.to_i : $15.to_i]
               end
             elsif TrelloHelper::NEXT_STATES.include?(list_name)
               sprint_id = [9999998]
@@ -156,7 +156,7 @@
           sprint.values.first.each do |card|
             if card.name =~ TrelloHelper::SPRINT_REGEX
               sprint_end = card.due.to_date
-            elsif sprint_num < 9999990 && card.name =~ /\((\d+|\?)\)(.*)/
+            elsif sprint_num < 9999990 && card.name =~ TrelloHelper::CARD_NAME_REGEX
               sizing = $1
               if sizing != '?'
                 team_total_sizing += sizing.to_i
@@ -164,17 +164,17 @@
             end
           end
 
-          unless sprint_end
+          if !sprint_end && trello.sprint_card.due
             sprint_end = trello.sprint_card.due.to_date
             (max_sprints_length - pre_sprint_count).times do
               trello.sprint_length_in_weeks.times{sprint_end = sprint_end.previous(trello.sprint_end_day.to_sym)}
             end
           end
-          unless sprint_begin
+          if !sprint_begin && sprint_end
             sprint_begin = sprint_end
             trello.sprint_length_in_weeks.times{sprint_begin = sprint_begin.previous(trello.sprint_start_day.to_sym)}
           end
-          sprint_dates = nil
+          sprint_dates = ''
           sprint_name = nil
           if sprint_num == 9999999
             sprint_name = "Backlog (Top)"
@@ -184,7 +184,7 @@
             sprint_next = "next"
           elsif sprint_num == 9999997
             sprint_name = "In Progress"
-            sprint_dates = "(#{sprint_begin} - #{sprint_end})"
+            sprint_dates = "(#{sprint_begin} - #{sprint_end})" if sprint_end
             sprint_in_progress = "in-progress"
           elsif sprint_num == 9999996
             sprint_name = "Complete"
@@ -192,15 +192,17 @@
             sprint_in_progress = "in-progress"
           else
             sprint_name = "Sprint #{sprint_id}"
-            sprint_dates = "(#{sprint_begin} - #{sprint_end})"
+            sprint_dates = "(#{sprint_begin} - #{sprint_end})" if sprint_end
           end
 %>
 <tr class="<%=sprint_backlog%> <%=sprint_in_progress%> <%=sprint_next%>">
 
 <th><%=sprint_name%><div class="sprint-date"><%=sprint_dates%></div></th>
 <%
-          sprint_begin = sprint_end.next(trello.sprint_start_day)
-          trello.sprint_length_in_weeks.times{sprint_end = sprint_end.next(trello.sprint_end_day.to_sym)}
+          if sprint_end
+            sprint_begin = sprint_end.next(trello.sprint_start_day)
+            trello.sprint_length_in_weeks.times{sprint_end = sprint_end.next(trello.sprint_end_day.to_sym)}
+          end
 
 %>
 
@@ -234,7 +236,12 @@
 %>
 
 
-
+    <br/>
+    <br/>
+    <br/>
+    <br/>
+    <hr>
+    <i>Generated at <%=Time.now.strftime("%I:%M%p %Z")%></i><%if trello.archive_path%> - <a href="<%=trello.archive_path%>">archives</a><%end%>
   </div><!-- /container -->
 </body>
 </html>
