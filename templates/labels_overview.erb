@@ -83,17 +83,9 @@
                 elsif list_name !~ TrelloHelper::SPRINT_REGEXES && !list.closed? && (['blocked', 'performance', 'ux', 'community'].include?(label_name) || label_name =~ TrelloHelper::STAR_LABEL_REGEX) 
                   include = true
                 end
-              end
-            elsif list_name !~ TrelloHelper::SPRINT_REGEXES
-              cards = trello.list_cards(list)
-              cards.each do |card|
-                labels = trello.card_labels(card)
-                label_names = labels.map{ |label| label.name }
-                label_names.each do |label_name|
-                  if ['blocked', 'performance', 'to be groomed', 'fedora', 'Fedora'].include?(label_name)
-                    label_data[label_name] = [] unless label_data[label_name]
-                    label_data[label_name] << [card, list_name, board]
-                  end
+                if include
+                  label_data[label_name] = [] unless label_data[label_name]
+                  label_data[label_name] << [card, list_name, board]
                 end
               end
             end
