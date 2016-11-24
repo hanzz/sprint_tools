@@ -486,7 +486,7 @@ class TrelloHelper
       team_boards_map.each do |b_name, b_id|
         team_boards[b_id] = boards[b_id]
       end
-      update_roadmaps(team, team_boards.values, team_boards, releases, roadmap_tag_to_epics, false, false)
+      update_roadmaps(team, team_boards.values, team_boards, releases, roadmap_tag_to_epics, true, false)
     end
   end
 
