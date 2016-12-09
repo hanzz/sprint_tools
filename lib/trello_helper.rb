@@ -38,7 +38,7 @@ class TrelloHelper
 
   ACCEPTED_STATES = {
     'Accepted' => 1,
-    'Done' => 2
+    'Done' => 2,
     'Complete' => 3
   }
 
