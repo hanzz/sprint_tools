@@ -10,7 +10,7 @@ class TrelloHelper
                 :sprint_length_in_weeks, :sprint_start_day, :sprint_end_day, :logo,
                 :docs_new_list_name, :roadmap_board_lists, :max_lists_per_board,
                 :current_release_labels, :next_release_labels, :default_product,
-                :other_products, :sprint_card, :archive_path
+                :other_products, :product_order, :sprint_card, :archive_path
 
   attr_accessor :boards, :trello_login_to_email, :cards_by_list, :labels_by_card, :list_by_card, :members_by_card, :members_by_id, :checklists_by_card, :lists_by_board, :comments_by_card, :board_id_to_team_map
 
@@ -24,7 +24,7 @@ class TrelloHelper
   STAGE1_DEP_LABEL = 'stage1-dep'
 
   SPRINT_REGEX = /^Sprint (\d+)/
-  DONE_REGEX = /^Done: ((\d+)\.(\d+)(.(\d+))?(.(\d+))?)/
+  DONE_REGEX = /^Done: ((\d+)(.(\d+))?(.(\d+))?)/
   RELEASE_COMPLETE_REGEX = /^Complete ((\d+)\.(\d+)(.(\d+))?(.(\d+))?)/
   SPRINT_REGEXES = Regexp.union([SPRINT_REGEX, DONE_REGEX, RELEASE_COMPLETE_REGEX])
 
@@ -32,41 +32,43 @@ class TrelloHelper
 
   STAR_LABEL_REGEX = /^([1-5])star$/
 
-  CARD_NAME_REGEX = /\((\d+|\?)\)(.*)/
+  CARD_NAME_REGEX = /^(\((\d+|\?)\))?(.*)/
+
+  EPIC_REF_REGEX = /\[.*\]\(https?:\/\/trello\.com\/[^\)]+\)/
 
   ACCEPTED_STATES = {
-    'Accepted' => true,
-    'Done' => true,
-    'Complete' => true
+    'Accepted' => 1,
+    'Done' => 2
+    'Complete' => 3
   }
 
   COMPLETE_STATES = {
-    'Complete' => true,
-    'Complete Upstream' => true
+    'Complete Upstream' => 1,
+    'Complete' => 2
   }
 
   IN_PROGRESS_STATES = {
-    'In Progress' => true,
-    'Design' => true,
-    'Pending Upstream' => true,
-    'Pending Merge' => true
+    'Design' => 1,
+    'In Progress' => 2,
+    'Pending Upstream' => 3,
+    'Pending Merge' => 4
   }
 
   NEXT_STATES = {
-    'Stalled' => true,
-    'Next' => true
+    'Stalled' => 1,
+    'Next' => 2
   }
 
   BACKLOG_STATES = {
-    'Backlog' => true
+    'Backlog' => 1
   }
 
   NEW_STATES = {
-    'New' => true
+    'New' => 1
   }
 
   REFERENCE_STATES = {
-    'References' => true
+    'References' => 1
   }
 
   CURRENT_SPRINT_NOT_ACCEPTED_STATES = IN_PROGRESS_STATES.merge(COMPLETE_STATES)
@@ -112,6 +114,10 @@ class TrelloHelper
 
   ROADMAP = 'roadmap'
 
+  TRELLO_CARD_INCREMENT = 16384.0
+
+  SortableCard = Struct.new(:card, :new_pos, :state, :product, :release)
+
   def initialize(opts)
     opts.each do |k,v|
       send("#{k}=",v)
@@ -136,6 +142,7 @@ class TrelloHelper
     @checklists_by_card = {}
     @lists_by_board = {}
     @comments_by_card = {}
+    @sortable_card_labels = {}
   end
 
   def board_ids
@@ -149,6 +156,159 @@ class TrelloHelper
     return board_ids
   end
 
+  # Associate sortable metadata to one trello card
+  def sortable_card(card)
+    sortable_card_labels = card_labels(card).map { |label| sortable_card_label(label) }.select { |label| !label.nil? }
+    if !sortable_card_labels.empty?
+      label_data = sortable_card_labels.first
+      sortable_card_labels[1..-1].each do |label|
+        if labels_in_order(label_data, label)
+          label_data = label
+        end
+      end
+    end
+    label_data = label_data ? label_data.dup : SortableCard.new
+    label_data.card = card
+    label_data.new_pos = card.pos
+    label_data
+  end
+
+  # generate a list of SortableCard objects from a list of cards
+  def sortable_cards(list)
+    sortable_cards = []
+    needs_sorting = false
+    last_card = nil
+    list_cards(list).sort_by { |card| card.pos }.each do |card|
+      card = sortable_card(card)
+      if card.release
+        if last_card
+          if !cards_in_order(last_card, card) && !cards_equal(last_card, card)
+            needs_sorting = true
+          end
+        end
+        last_card = card
+      end
+      sortable_cards << card
+    end
+    needs_sorting ? sortable_cards : nil
+  end
+
+
+  # O(n log n) implementation cribbed shamelessly from
+  # https://en.wikipedia.org/wiki/Longest_increasing_subsequence
+  def longest_increasing_sequence(a)
+    pile = []
+    middle_vals = []
+    longest = 0
+    a.each_index do |i|
+      lo = 1
+      hi = longest
+      while lo <= hi
+        mid = Float((lo+hi)/2).ceil
+        if a[middle_vals[mid]] < a[i]
+          lo = mid + 1
+        else
+          hi = mid - 1
+        end
+      end
+      pile[i] = middle_vals[lo - 1]
+      middle_vals[lo] = i
+      if lo > longest
+        longest = lo
+      end
+    end
+    longest_sequence = []
+    k = middle_vals[longest]
+    (0..(longest - 1)).reverse_each do |i|
+      longest_sequence[i] = a[k]
+      k = pile[k]
+    end
+    return longest_sequence
+  end
+
+  # For each card which needs to be updated, find the ids of cards
+  # before and after it which should be used in calculating its new
+  # position. Handle edge cases where the card is at going to be at
+  # the start or end of the list
+  #
+  # The end of the run is always selected as the "after" card, since
+  # in the caller, we calculate the new position as halfway between
+  # the "before" card position and the "after" card position.
+  # Selecting the end of the run makes sure that the calculated
+  # position is strictly increasing, even if Trello renumbers the
+  # cards
+  def bounding_card_ids_by_id(cards)
+    lis = longest_increasing_sequence(cards.map { |c| c.card.pos })
+    run_start = -1
+    run_end = -1
+    cards_between_bounding = {}
+    # Iterate over the cards to find contiguous runs of cards which need
+    # their position attribute updated
+    cards.each_with_index do |card, index|
+      if !lis.include? card.card.pos
+        if run_start == -1
+          run_start = index
+        end
+        run_end = index
+      end
+      # Check if we're in a run of cards that need updating
+      if run_start != -1
+        # Check if we've reached the end of the run
+        if (lis.include? card.card.pos) || (index == (cards.length - 1))
+          # Find the position of the in-order card preceding the run,
+          # use that to determine the lower bound for the run of cards
+          # needing updates.
+          #
+          # Determine before and after card ids. After_index will
+          # always be the same - we want the card to be between the
+          # previous card and the end of the run, so it's always
+          # properly ordered regardless how trello renumbers the list.
+          after_index = (run_end == (cards.length - 1)) ? nil : cards[run_end + 1].card.id
+          (run_start..run_end).each do |run_index|
+            bounding_card_ids = {}
+            bounding_card_ids[:before] = (run_index == 0) ? nil : cards[run_index - 1].card.id
+            bounding_card_ids[:after] = after_index
+            cards_between_bounding[cards[run_index].card.id] = bounding_card_ids
+          end
+          run_start = -1
+          run_end = -1
+        end
+      end
+    end
+    cards_between_bounding
+  end
+
+  def product_to_order
+    @product_to_order ||= Hash[product_order.map.with_index{ |v,i| [v,i] }]
+  end
+
+  # Return true if the product labels for SortableCard objects card1
+  # and card2 are in order
+  def labels_in_order(card1, card2)
+    product_to_order[card1.product] < product_to_order[card2.product]
+  end
+
+  # Return true if the SortableCard objects card1 and card2 are in
+  # order
+  def cards_in_order(card1, card2)
+    if card1.release < card2.release
+      return true
+    elsif card1.release == card2.release
+      if RELEASE_STATE_ORDER[card1.state] < RELEASE_STATE_ORDER[card2.state]
+        return true
+      end
+    end
+    if card1.product != card2.product
+      return true
+    end
+    return false
+  end
+
+  # Return true if the SortableCard objects card1 and card2 are equal
+  def cards_equal(card1, card2)
+    ((RELEASE_STATE_ORDER[card1.state] == RELEASE_STATE_ORDER[card2.state]) &&
+     (card1.release == card2.release))
+  end
 
   def board_id_to_team_map
     return @board_id_to_team_map if @board_id_to_team_map
@@ -337,7 +497,7 @@ class TrelloHelper
       trello_do('lists') do
         lists = board.lists(:filter => [:all])
         lists = lists.delete_if{ |list| list.name !~ TrelloHelper::SPRINT_REGEXES && list.closed? }
-        lists.sort_by!{ |list| [list.name =~ TrelloHelper::SPRINT_REGEXES ? ($1.to_i) : 9999999, $3 ? $3.to_i : $10.to_i, $4 ? $4.to_i : $11.to_i, $6 ? $6.to_i : $13.to_i, $8 ? $8.to_i : $15.to_i]}
+        lists.sort_by!{ |list| [list.name =~ TrelloHelper::SPRINT_REGEXES ? ($1.to_i) : 9999999, $3 ? $3.to_i : $9.to_i, $5 ? $5.to_i : $10.to_i, $7 ? $7.to_i : $12.to_i, $14.to_i]}
         lists.reverse!
       end
     end
@@ -427,20 +587,42 @@ class TrelloHelper
   def clear_epic_refs(epic_card)
     checklists = list_checklists(epic_card)
     checklists.each do |cl|
-      cl.items.each do |item|
-        puts("going to delete #{item.name}")
-        if item.name =~ /\[.*\]\(https?:\/\/trello\.com\/[^\)]+\)/
-          begin
-              puts("deleting #{item.name}")
-            checklist_delete_item(cl, item)
-          rescue => e
-            $stderr.puts "Error deleting checklist item: #{e.message}"
-          end
+      clear_checklist_epic_refs(cl)
+    end
+  end
+
+  def clear_checklist_epic_refs(cl)
+    cl.items.each do |item|
+      if item.name =~ EPIC_REF_REGEX
+        begin
+          checklist_delete_item(cl, item)
+        rescue => e
+          $stderr.puts "Error deleting checklist item: #{e.message}"
         end
       end
     end
-    create_checklist(epic_card, UNASSIGNED_RELEASE)
-#     create_checklist(epic_card, FUTURE_RELEASE)
+  end
+
+  def checklist_to_checklist_item_names(epic_card)
+    checklist_to_cins = {}
+    checklists = list_checklists(epic_card)
+    checklists.each do |cl|
+      cl.items.each do |item|
+        if item.name =~ EPIC_REF_REGEX
+          checklist_to_cins[cl.name] = [] unless checklist_to_cins[cl.name]
+          checklist_to_cins[cl.name] << [item.name, item.complete?]
+        end
+      end
+    end
+    checklist_to_cins
+  end
+
+  def checklist_item_names(cl)
+    cins = []
+    cl.items.each do |item|
+      cins << item.name
+    end
+    cins
   end
 
   def clear_checklist(cl)
@@ -572,9 +754,23 @@ class TrelloHelper
               end
             end
 
+            accepted_lists.sort_by!{ |l| ACCEPTED_STATES[l.name] }
+            accepted_lists.reverse!
+            complete_lists.sort_by!{ |l| COMPLETE_STATES[l.name] }
+            complete_lists.reverse!
+            in_progress_lists.sort_by!{ |l| IN_PROGRESS_STATES[l.name] }
+            in_progress_lists.reverse!
+            next_lists.sort_by!{ |l| NEXT_STATES[l.name] }
+            next_lists.reverse!
+            backlog_lists.sort_by!{ |l| BACKLOG_STATES[l.name] }
+            backlog_lists.reverse!
+            new_lists.sort_by!{ |l| NEW_STATES[l.name] }
+            new_lists.reverse!
+            other_lists.sort_by!{ |l| l.name }
+            
             lists = accepted_lists + complete_lists + in_progress_lists + next_lists + backlog_lists + new_lists
 
-            previous_sprint_lists = previous_sprint_lists.sort_by { |l| [l.name =~ SPRINT_REGEXES ? $1.to_i : 9999999, $3 ? $3.to_i : $10.to_i, $4 ? $4.to_i : $11.to_i, $6 ? $6.to_i : $13.to_i, $8 ? $8.to_i : $15.to_i]}
+            previous_sprint_lists = previous_sprint_lists.sort_by { |l| [l.name =~ SPRINT_REGEXES ? $1.to_i : 9999999, $3 ? $3.to_i : $9.to_i, $5 ? $5.to_i : $10.to_i, $7 ? $7.to_i : $12.to_i, $14.to_i]}
             lists += previous_sprint_lists
             lists += other_lists
             lists.each do |list|
@@ -660,9 +856,15 @@ class TrelloHelper
           else
             tags_without_epics_checklist = create_checklist(none_epic_card, NONE_CHECKLIST_NAME)
           end
-          clear_checklist(tags_without_epics_checklist) if tags_without_epics_checklist
-          tags_without_epics.keys.each do |tag|
-            checklist_add_item(tags_without_epics_checklist, tag, false, 'bottom')
+
+          tags_without_epics_keys = tags_without_epics.keys
+          tags_without_epics_keys.sort_by!{ |tag| tag }
+
+          if checklist_item_names(tags_without_epics_checklist) != tags_without_epics_keys
+            clear_checklist(tags_without_epics_checklist)
+            tags_without_epics_keys.each do |tag|
+              checklist_add_item(tags_without_epics_checklist, tag, false, 'bottom')
+            end
           end
         end
       end
@@ -677,8 +879,8 @@ class TrelloHelper
       epic_stories_by_epic.each_value do |epic_stories|
         first_epic_story = epic_stories.first
         if first_epic_story
-          clear_epic_refs(first_epic_story[0])
-          puts "\nAdding cards to #{first_epic_story[0].name}:"
+          epic_card = first_epic_story[0]
+          checklist_to_cins = {}
           epic_stories.each do |epic_story|
             epic = epic_story[0]
             card = epic_story[1]
@@ -688,38 +890,44 @@ class TrelloHelper
             accepted = epic_story[5]
             next_card_releases = epic_story[6]
 
-            stars = ''
-            card_labels = card_labels(card)
-            card_labels.each do |label|
-              if label.name =~ STAR_LABEL_REGEX
-                star_level = $1.to_i
-                stars = ' ' + (':star:' * star_level)
-                break
-              end
-            end
-
-            checklist_item_name = nil
-            if include_board_name_in_epic
-              checklist_item_name = "[#{card.name}](#{card.url}) (#{list.name}) (#{board.name})#{stars}"
-            else
-              checklist_item_name = "[#{card.name}](#{card.url}) (#{list.name})#{stars}"
-            end
+            cin = checklist_item_name(card, list, board, include_board_name_in_epic)
 
             if !next_card_releases.empty?
               next_card_releases.each do |card_release|
-                cl = create_checklist(epic, card_release)
-                checklist_add_item(cl, checklist_item_name, accepted, 'bottom')
+                checklist_to_cins[card_release] = [] unless checklist_to_cins[card_release]
+                checklist_to_cins[card_release] << [cin, accepted]
               end
             else
-              stories_checklist = checklist(epic, checklist_name)
-              if stories_checklist
-                puts "Adding #{card.url}"
-                checklist_add_item(stories_checklist, checklist_item_name, accepted, 'bottom')
-              end
+              checklist_to_cins[checklist_name] = [] unless checklist_to_cins[checklist_name]
+              checklist_to_cins[checklist_name] << [cin, accepted]
+            end
+          end
+
+          puts "\nAdding cards to #{epic_card.name}:"
+
+          existing_checklist_to_cins = checklist_to_checklist_item_names(epic_card)
+          existing_checklist_to_cins.each do |checklist_name, cins|
+            if cins == checklist_to_cins[checklist_name]
+              puts "#{checklist_name} is unchanged"
+              checklist_to_cins.delete(checklist_name)
+            elsif checklist_to_cins[checklist_name]
+              puts "#{checklist_name} is changed"
+            end
+          end
+
+          checklist_to_cins.each do |checklist_name, cins|
+            cl = create_checklist(epic_card, checklist_name)
+            clear_checklist_epic_refs(cl)
+            cins.each do |cin_info|
+              cin = cin_info[0]
+              accepted = cin_info[1]
+              puts "Adding #{cin} to #{checklist_name}"
+              checklist_add_item(cl, cin, accepted, 'bottom')
             end
           end
         end
       end
+
       # Delete empty epic checklists
       epic_lists.each do |epic_list|
         list_cards(epic_list).each do |epic_card|
@@ -742,7 +950,6 @@ class TrelloHelper
   def delete_empty_epic_checklists(epic_card)
     checklists = list_checklists(epic_card)
     checklists.each do |cl|
-      next if [UNASSIGNED_RELEASE].include? cl.name
       if cl.items.empty?
         begin
           trello_do('checklist') do
@@ -1039,6 +1246,19 @@ class TrelloHelper
     release_cards_history
   end
 
+  def state_title(state, product, release)
+    title = nil
+    product_release = ((product.nil? || product.empty?) ? '' : "#{product}-") + release
+    if state == 'committed'
+      title = "Committed in plan to be delivered (i.e. label=committed-#{product_release}) and/or already complete (i.e. card is in an Accepted list or after on a team board, even if card was originally targeted or proposed)"
+    elsif state == 'targeted'
+      title = "Targeted to be delivered (i.e. label=targeted-#{product_release}) but not yet complete (i.e. card hasn't made it to the Accepted list or after on a team board)"
+    else
+      title = "Proposed to be delivered (i.e. label=proposed-#{product_release}) and awaiting approval"
+    end
+    title
+  end
+
   def dump_board_json(board)
     board = board(board) unless board.respond_to? :id
     board_json_url = "#{board.url}.json"
@@ -1126,5 +1346,39 @@ class TrelloHelper
 
   def retry_sleep(retry_count)
     sleep DEFAULT_RETRY_SLEEP + (DEFAULT_RETRY_INC * retry_count)
+  end
+
+  private
+
+  def checklist_item_name(card, list, board, include_board_name_in_epic)
+    cin = nil
+    stars = ''
+    card_labels = card_labels(card)
+    card_labels.each do |label|
+      if label.name =~ STAR_LABEL_REGEX
+        star_level = $1.to_i
+        stars = ' ' + (':star:' * star_level)
+        break
+      end
+    end
+    if include_board_name_in_epic
+      cin = "[#{card.name}](#{card.url}) (#{list.name}) (#{board.name})#{stars}"
+    else
+      cin = "[#{card.name}](#{card.url}) (#{list.name})#{stars}"
+    end
+    cin
+  end
+
+  # Parse out sortable/prioritizable metadata from card label
+  def sortable_card_label(label)
+    label_data = @sortable_card_labels[label.name]
+    if label_data.nil? && label.name =~ TrelloHelper::RELEASE_LABEL_REGEX
+      label_data = SortableCard.new()
+      label_data.state = $1 if $1
+      label_data.product = $3 ? $3 : 'ocp'
+      label_data.release = Gem::Version.new($4) if $4
+      @sortable_card_labels[label.name] = label_data
+    end
+    label_data
   end
 end

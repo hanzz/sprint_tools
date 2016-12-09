@@ -5,10 +5,13 @@
 :consumer_key: <consumer_key>
 :consumer_secret: <consumer_secret>
 :oauth_token: <oauth_token>
-:oauth_token_secret: <oauth_secret>
 :max_lists_per_board: 26
 :default_product: product1
 :other_products:
+  - product2
+  - product3
+:product_order:
+  - product1
   - product2
   - product3
 :teams:

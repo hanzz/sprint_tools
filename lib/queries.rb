@@ -56,7 +56,7 @@ class Sprint
       },
       :qe_ready => {
         :parent => :needs_qe,
-        :function => lambda{ |card| has_comment?(card, ['tcms', 'goo.gl', 'case']) }
+        :function => lambda{ |card| has_comment?(card, ['tcms', 'goo.gl', 'url.corp.redhat.com']) }
       },
       :approved => {
         :parent   => :qe_ready,
@@ -87,7 +87,7 @@ class Sprint
         :type => 'rfes'
       },
       :complete_rfes => {
-        :function => lambda{ |rfe| has_referencing_card?(rfe, accepted_and_after_stories)},
+        :function => lambda{ |rfe| !(rfe['status'] == 'POST') && has_referencing_card?(rfe, accepted_and_after_stories)},
         :type => 'rfes'
       },
       :unplanned_rfes => {

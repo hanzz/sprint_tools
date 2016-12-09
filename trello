@@ -112,6 +112,157 @@ end
 
 trello = load_conf(TrelloHelper, CONFIG.trello, true)
 
+# Generate a formatted string representing the sortable card for
+# dry-run output
+def card_data_string(card)
+  labeldata = if card.release
+    label_text = "%-30s" % "#{card.state}-#{card.product}-#{card.release}"
+  else
+    " " * 30
+  end
+  "#{labeldata} %-4d pos: %-20s name: [%-30s]" % [card.card.short_id, "#{card.new_pos}", card.card.name[0..29]]
+end
+
+# Sort only the release cards by their release label, release number
+# Sort only the cards in TrelloHelper::NEXT_STATES and TrelloHelper::BACKLOG_STATES
+command :organize_release_cards do |c|
+
+  c.option "--dry-run", "Show what changes would be made without actually making them"
+
+  c.syntax = "#{name}"
+  c.description = "Rearrange board list cards sorted by release"
+  c.action do |args, options|
+    release_states = TrelloHelper::NEXT_STATES.keys + TrelloHelper::BACKLOG_STATES.keys
+    trello.boards.values.each do |board|
+      trello.board_lists(board).each do |list|
+        next unless release_states.include? list.name
+        puts "\n*** Processing list #{list.name} in board #{trello.board(list.board_id).name}"
+        # *** Set up for sorting list
+        # list_cards contains the cards for this board, sorted by
+        # position (i.e. as they are displayed in the UI)
+        sortable_cards = trello.sortable_cards(list)
+        next unless sortable_cards
+        puts "\nCards in list, pre-sort"
+        sortable_cards.each do |card|
+          labeldata = card_data_string(card)
+          puts "  #{labeldata}"
+        end
+        puts "Sorting.\n"
+        sortcount = 0
+        needs_sorting = true
+        # *** Start sort logic
+        while needs_sorting do
+          needs_sorting = false
+          sortcount += 1
+          puts "Still sorting..." if (sortcount % 10) == 0
+          last_card = nil
+          ooo = nil
+          sortable_cards.each do |card|
+            next unless card.release
+            if last_card
+              if ooo
+                if !trello.cards_in_order(ooo, card) && !trello.cards_equal(ooo, card)
+                  ooo = card
+                  needs_sorting = true
+                end
+              else
+                if !trello.cards_in_order(last_card, card) && !trello.cards_equal(last_card, card)
+                  ooo = card
+                  needs_sorting = true
+                end
+              end
+            end
+            last_card = card
+          end
+          if needs_sorting
+            insert_before = nil
+            sortable_cards[0..(sortable_cards.index(ooo) - 1)].reverse_each do |card|
+              next unless card.release
+              if trello.cards_in_order(ooo, card)
+                if insert_before
+                  if trello.cards_in_order(card, insert_before)
+                    insert_before = card
+                  end
+                else
+                  insert_before = card
+                end
+              end
+            end
+            if insert_before
+              delete_index = sortable_cards.index { |card| card == ooo }
+              sortable_cards.delete_at(delete_index)
+              insert_index = sortable_cards.index { |card| card == insert_before }
+              sortable_cards.insert(insert_index, ooo)
+            end
+          end
+        end
+
+        bounding_card_ids_by_id = trello.bounding_card_ids_by_id(sortable_cards)
+
+        puts "Cards in list, post-sort"
+        sortable_cards.each do |card|
+          labeldata = card_data_string(card)
+          if bounding_card_ids_by_id.include? card.card.id
+            marker = "*"
+          else
+            marker = " "
+          end
+          puts "#{marker} #{labeldata}"
+        end
+        puts "\nUpdating cards."
+
+        # For each card that needs renumbering, use the bounding card
+        # IDs to find the positions of the previous (adjacent,
+        # in-order) and following in-order cards to calculate a new
+        # position that is guaranteed to be strictly increasing.
+        bounding_card_ids_by_id.each do |card_id, bounding_card_ids|
+          list_cards = trello.list_cards(list)
+          card = list_cards.find { |c| c.id == card_id }
+          before_card = nil
+          after_card = nil
+          # "top" and "bottom" have special meaning for Trello card
+          # positions - i.e. "before the start of list" and "after the
+          # end of list" - we use them so we don't honk up the
+          # renumbering algorithms on the server side.
+          if bounding_card_ids[:before].nil?
+            card.pos = 'top'
+          elsif bounding_card_ids[:after].nil?
+            card.pos = 'bottom'
+          else
+            # If we're not headed to either end of the list, put us
+            # between the appropriate pair of in-order cards.
+            before_card = list_cards.find { |c| c.id == bounding_card_ids[:before] }
+            after_card = list_cards.find { |c| c.id == bounding_card_ids[:after] }
+            card.pos = Float(before_card.pos + after_card.pos) / 2
+          end
+          if options.dry_run
+            # Make sure we have the cards we need now, even if we didn't before.
+            before_card = list_cards.find { |c| c.id == bounding_card_ids[:before] } if before_card.nil?
+            after_card = list_cards.find { |c| c.id == bounding_card_ids[:after] } if after_card.nil?
+            if card.pos == 'top' && after_card
+              # Fake the top card position for future faking (since we
+              # will do math with it)
+              card.pos = Float(after_card.pos) / 2
+            elsif card.pos == 'bottom' && before_card
+              # Fake the bottom card position for future faking (since
+              # we will do math with it)
+              card.pos = before_card.pos + TrelloHelper::TRELLO_CARD_INCREMENT
+            end
+            puts "  Would update: #{labeldata = card_data_string(trello.sortable_card(card))}"
+          else
+            puts "  Updating: #{labeldata = card_data_string(trello.sortable_card(card))}"
+            trello.update_card(card)
+            # We want to get updated card positions for the next run,
+            # so we force reloading the cards for this list.
+            trello.cards_by_list.delete(list.id)
+          end
+        end
+      end
+    end
+  end
+end
+
+
 command :backup_org_boards do |c|
 
   c.option "--out-dir DIRECTORY", "Directory to dump backup json to"
@@ -208,12 +359,25 @@ command :sprint_identifier do |c|
   end
 end
 
+command :release_identifier do |c|
+  c.syntax = "#{name} release_identifier"
+
+  c.description = "Print the release identifier"
+  c.action do |args, options|
+    if trello.current_release_labels && !trello.current_release_labels.empty?
+      if trello.current_release_labels.first =~ TrelloHelper::RELEASE_LABEL_REGEX
+        print "#{$4}"
+      end
+    end
+  end
+end
+
 command :days_left_in_sprint do |c|
   c.syntax = "#{name} days_left_in_sprint"
 
   c.description = "Print the number of days left in the sprint"
   c.action do |args, options|
-    print (trello.sprint_card.due.to_time - Time.new).to_i / (60*60*24)
+    print ((trello.sprint_card.due.to_time - Time.new) / (60*60*24)).ceil
   end
 end
 
@@ -223,7 +387,27 @@ command :days_until_code_freeze do |c|
   c.description = "Print the number of days left until the next code freeze"
   c.action do |args, options|
     sprint = Sprint.new({:trello => trello, :uninitialized => true})
-    print (sprint.code_freeze.to_time - Time.new).to_i / (60*60*24)
+    print ((sprint.code_freeze.to_time - Time.new) / (60*60*24)).ceil
+  end
+end
+
+command :days_until_feature_complete do |c|
+  c.syntax = "#{name} days_until_feature_complete"
+
+  c.description = "Print the number of days left until feature_complete"
+  c.action do |args, options|
+    sprint = Sprint.new({:trello => trello, :uninitialized => true})
+    print ((sprint.feature_complete.to_time - Time.new) / (60*60*24)).ceil
+  end
+end
+
+command :days_until_stage_one_dep_complete do |c|
+  c.syntax = "#{name} days_until_stage_one_dep_complete"
+
+  c.description = "Print the number of days left until stage_one_dep_complete"
+  c.action do |args, options|
+    sprint = Sprint.new({:trello => trello, :uninitialized => true})
+    print ((sprint.stage_one_dep_complete.to_time - Time.new) / (60*60*24)).ceil
   end
 end
 
@@ -690,6 +874,7 @@ command :update do |c|
       end
       trello.boards.each do |board_id, board|
         next if board_id == trello.documentation_board.id
+        team_map = trello.board_id_to_team_map[board_id]
         puts "\nBoard Name: #{board.name}"
         lists = trello.board_lists(board)
         lists.each do |list|
@@ -706,7 +891,7 @@ command :update do |c|
                     checklists << 'Tasks' if options.add_task_checklists
                     checklists << 'Bugs' if options.add_bug_checklists && !label_names.include?('no-qe')
 
-                    if options.add_doc_cards && label_names.include?('documentation') && doc_cards.any?
+                    if options.add_doc_cards && label_names.include?('documentation') && doc_cards.any? && !team_map[:exclude_from_documentation_board]
                       docs_card = nil
                       doc_cards.each do |d_card|
                         if d_card.desc.include?(card.short_url)
@@ -717,7 +902,7 @@ command :update do |c|
                       unless docs_card
                         name = card.name
                         if card.name =~ TrelloHelper::CARD_NAME_REGEX
-                          name = $2.strip
+                          name = $3.strip
                         end
                         docs_card = Trello::Card.create(:name => "Document: #{name}", :desc => "Corresponding Development Card: #{card.short_url}", :list_id => trello.documentation_next_list.id)
                       end
