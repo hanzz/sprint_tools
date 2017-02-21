@@ -1248,7 +1248,7 @@ class TrelloHelper
 
   def state_title(state, product, release)
     title = nil
-    product_release = ((product.nil? || product.empty?) ? '' : "#{product}-") + release
+    product_release = ((product.nil? || product.empty?) ? '' : "#{product}-") + ((release.nil? || release.empty?) ? '' : "#{release}")
     if state == 'committed'
       title = "Committed in plan to be delivered (i.e. label=committed-#{product_release}) and/or already complete (i.e. card is in an Accepted list or after on a team board, even if card was originally targeted or proposed)"
     elsif state == 'targeted'
